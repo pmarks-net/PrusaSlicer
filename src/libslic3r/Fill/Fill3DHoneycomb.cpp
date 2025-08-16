@@ -302,20 +302,23 @@ void Fill3DHoneycomb::_fill_surface_single(
             const bool use_even_parity_checkerboard = printVert_curr;
 
             // 1. Calculate perpOffset to find the real size of the square openings.
-            const coordf_t perpOffset = std::abs(triWave(Zpos_curr, gridSize) / 2.0);
+            const coordf_t perpOffset_curr = std::abs(triWave(Zpos_curr, gridSize) / 2.0);
+            const coordf_t perpOffset_prev = std::abs(triWave(Zpos_prev, gridSize) / 2.0);
 
             // 2. Calculate the side length of the square.
-            const coordf_t square_side = gridSize - 2.0 * perpOffset;
+            const coordf_t square_side_curr = gridSize - 2.0 * perpOffset_curr;
+            const coordf_t square_side_prev = gridSize - 2.0 * perpOffset_prev;
+            const coordf_t square_side_for_lines = std::max(square_side_curr, square_side_prev);
 
             // 3. Calculate spacing for the serpentine fill.
             const coordf_t required_spacing = scale_(this->spacing);
 
             // Only proceed if there is enough space to draw at least one fill line.
-            if (square_side > required_spacing) {
-                const int num_gaps = ceil(square_side / required_spacing);
+            if (square_side_curr > required_spacing) {
+                const int num_gaps = ceil(square_side_curr / required_spacing);
                 if (num_gaps >= 2) { // Need at least 2 gaps to draw one line in between.
                     const int num_lines = num_gaps + 1;
-                    const coordf_t actual_spacing = square_side / static_cast<coordf_t>(num_gaps);
+                    const coordf_t actual_spacing = square_side_curr / static_cast<coordf_t>(num_gaps);
 
                     const int n_max = ceil(bb.size()(0) / gridSize);
                     const int m_max = ceil(bb.size()(1) / gridSize);
@@ -333,19 +336,20 @@ void Fill3DHoneycomb::_fill_surface_single(
                                 // This grid cell corresponds to a small square. Fill it with a serpentine pattern.
                                 const coordf_t center_x = n * gridSize + gridSize / 2.;
                                 const coordf_t center_y = m * gridSize + gridSize / 2.;
-                                const coordf_t half_side = square_side / 2.0;
-
-                                const coord_t min_x = coord_t(center_x - half_side);
-                                const coord_t max_x = coord_t(center_x + half_side);
-                                const coord_t min_y = coord_t(center_y - half_side);
-                                const coord_t max_y = coord_t(center_y + half_side);
-
+                                
                                 Points serpentine_points;
                                 // Number of lines to draw is num_lines - 2. Each has 2 points.
                                 if (num_lines > 2)
                                     serpentine_points.reserve(2 * (num_lines - 2));
 
                                 if (printVert_curr) { // Vertical (axial) fill pattern
+                                    const coordf_t half_side_x = square_side_curr / 2.0;
+                                    const coordf_t half_side_y = square_side_for_lines / 2.0;
+                                    const coord_t min_x = coord_t(center_x - half_side_x);
+                                    const coord_t max_x = coord_t(center_x + half_side_x);
+                                    const coord_t min_y = coord_t(center_y - half_side_y);
+                                    const coord_t max_y = coord_t(center_y + half_side_y);
+
                                     for (int i = 1; i <= num_lines - 2; ++i) {
                                         const coord_t current_x = coord_t(min_x + i * actual_spacing);
                                         if (serpentine_points.empty()) {
@@ -362,6 +366,13 @@ void Fill3DHoneycomb::_fill_surface_single(
                                         }
                                     }
                                 } else { // Horizontal (axial) fill pattern
+                                    const coordf_t half_side_x = square_side_for_lines / 2.0;
+                                    const coordf_t half_side_y = square_side_curr / 2.0;
+                                    const coord_t min_x = coord_t(center_x - half_side_x);
+                                    const coord_t max_x = coord_t(center_x + half_side_x);
+                                    const coord_t min_y = coord_t(center_y - half_side_y);
+                                    const coord_t max_y = coord_t(center_y + half_side_y);
+
                                     for (int i = 1; i <= num_lines - 2; ++i) {
                                         const coord_t current_y = coord_t(min_y + i * actual_spacing);
                                         if (serpentine_points.empty()) {
@@ -405,7 +416,8 @@ void Fill3DHoneycomb::_fill_surface_single(
 
                 if (num_lines >= 3) {
                     // The length of the lines is shorter, accounting for switchback clearance.
-                    const coordf_t line_length = hole_side - 2.0 * scaled_spacing;
+                    // Each switchback protrudes spacing/2 into the main infill.
+                    const coordf_t line_length = hole_side - scaled_spacing;
                     if (line_length <= 0) goto end_transverse_fill; // Skip if lines have no length.
 
                     // The checkerboard pattern depends on the state of the PREVIOUS layer (the transition layer)
