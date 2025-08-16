@@ -271,7 +271,125 @@ void Fill3DHoneycomb::_fill_surface_single(
 	       bb.size()(0),
 	       bb.size()(1),
 	       !params.dont_adjust);
-    
+
+    // Recognize when we're drawing a layer where printVert just flipped.
+    // This indicates a transition layer where the 'open squares' of the
+    // truncated octahedron faces appear. We fill these squares.
+    auto calculate_print_vert = [&](coordf_t z_pos, coordf_t grid_size) {
+        // This logic MUST be identical to the one in makeActualGrid to correctly predict its behavior.
+        coordf_t z_cycle = fmod(z_pos + grid_size/2., grid_size * 2.) / (grid_size * 2.);
+        return z_cycle < 0.5;
+    };
+
+    // We must use the single layer height from params to correctly identify the previous layer's Z position.
+    // A value <= 0 indicates it's not available, so we skip the check.
+    if (params.layer_height > 0) {
+        coordf_t single_layer_height_scaled = scale_(params.layer_height);
+        coordf_t Zpos_curr = scale_(this->z) * zScale;
+        coordf_t Zpos_prev = (scale_(this->z) - single_layer_height_scaled) * zScale;
+
+        bool printVert_curr = calculate_print_vert(Zpos_curr, gridSize);
+        bool printVert_prev = calculate_print_vert(Zpos_prev, gridSize);
+
+        if (printVert_curr != printVert_prev) {
+            // This is a transition layer. Generate a serpentine fill for the open squares.
+            Polylines serpentine_polylines;
+            serpentine_polylines.reserve((size_t(bb.size()(0) / gridSize) + 2) * (size_t(bb.size()(1) / gridSize) + 2));
+
+            // Determine which checkerboard pattern to use based on the direction of the flip.
+            const bool use_even_parity_checkerboard = printVert_curr;
+
+            // 1. Calculate perpOffset to find the real size of the square openings.
+            const coordf_t perpOffset = std::abs(triWave(Zpos_curr, gridSize) / 2.0);
+
+            // 2. Calculate the side length of the square.
+            const coordf_t square_side = gridSize - 2.0 * perpOffset;
+
+            // 3. Calculate spacing for the serpentine fill.
+            const coordf_t required_spacing = scale_(this->spacing);
+
+            // Only proceed if there is enough space to draw at least one fill line.
+            if (square_side > required_spacing) {
+                const int num_gaps = ceil(square_side / required_spacing);
+                if (num_gaps >= 2) { // Need at least 2 gaps to draw one line in between.
+                    const int num_lines = num_gaps + 1;
+                    const coordf_t actual_spacing = square_side / static_cast<coordf_t>(num_gaps);
+
+                    const int n_max = ceil(bb.size()(0) / gridSize);
+                    const int m_max = ceil(bb.size()(1) / gridSize);
+
+                    for (int n = 0; n <= n_max; ++n) {
+                        for (int m = 0; m <= m_max; ++m) {
+                            bool is_square_location;
+                            if (use_even_parity_checkerboard) {
+                                is_square_location = ((n + m) % 2 == 0);
+                            } else {
+                                is_square_location = ((n + m) % 2 != 0);
+                            }
+
+                            if (is_square_location) {
+                                // This grid cell corresponds to a small square. Fill it with a serpentine pattern.
+                                const coordf_t center_x = n * gridSize + gridSize / 2.;
+                                const coordf_t center_y = m * gridSize + gridSize / 2.;
+                                const coordf_t half_side = square_side / 2.0;
+
+                                const coord_t min_x = coord_t(center_x - half_side);
+                                const coord_t max_x = coord_t(center_x + half_side);
+                                const coord_t min_y = coord_t(center_y - half_side);
+                                const coord_t max_y = coord_t(center_y + half_side);
+
+                                Points serpentine_points;
+                                // Number of lines to draw is num_lines - 2. Each has 2 points.
+                                if (num_lines > 2)
+                                    serpentine_points.reserve(2 * (num_lines - 2));
+
+                                if (printVert_curr) { // Vertical fill pattern
+                                    for (int i = 1; i <= num_lines - 2; ++i) {
+                                        const coord_t current_x = coord_t(min_x + i * actual_spacing);
+                                        if (serpentine_points.empty()) {
+                                            serpentine_points.emplace_back(current_x, min_y);
+                                            serpentine_points.emplace_back(current_x, max_y);
+                                        } else {
+                                            if (serpentine_points.back().y() == max_y) {
+                                                serpentine_points.emplace_back(current_x, max_y);
+                                                serpentine_points.emplace_back(current_x, min_y);
+                                            } else {
+                                                serpentine_points.emplace_back(current_x, min_y);
+                                                serpentine_points.emplace_back(current_x, max_y);
+                                            }
+                                        }
+                                    }
+                                } else { // Horizontal fill pattern
+                                    for (int i = 1; i <= num_lines - 2; ++i) {
+                                        const coord_t current_y = coord_t(min_y + i * actual_spacing);
+                                        if (serpentine_points.empty()) {
+                                            serpentine_points.emplace_back(min_x, current_y);
+                                            serpentine_points.emplace_back(max_x, current_y);
+                                        } else {
+                                            if (serpentine_points.back().x() == max_x) {
+                                                serpentine_points.emplace_back(max_x, current_y);
+                                                serpentine_points.emplace_back(min_x, current_y);
+                                            } else {
+                                                serpentine_points.emplace_back(min_x, current_y);
+                                                serpentine_points.emplace_back(max_x, current_y);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (serpentine_points.size() > 1) {
+                                    serpentine_polylines.emplace_back(std::move(serpentine_points));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Add the new serpentine polylines to the main pattern.
+            append(polylines, std::move(serpentine_polylines));
+        }
+    }
+
     // move pattern in place
     for (Polyline &pl : polylines){
       pl.translate(bb.min);
