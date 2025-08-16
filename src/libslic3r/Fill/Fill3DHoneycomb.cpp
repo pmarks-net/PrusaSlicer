@@ -287,12 +287,14 @@ void Fill3DHoneycomb::_fill_surface_single(
         coordf_t single_layer_height_scaled = scale_(params.layer_height);
         coordf_t Zpos_curr = scale_(this->z) * zScale;
         coordf_t Zpos_prev = (scale_(this->z) - single_layer_height_scaled) * zScale;
+        coordf_t Zpos_prev_prev = (scale_(this->z) - 2 * single_layer_height_scaled) * zScale;
 
         bool printVert_curr = calculate_print_vert(Zpos_curr, gridSize);
         bool printVert_prev = calculate_print_vert(Zpos_prev, gridSize);
+        bool printVert_prev_prev = calculate_print_vert(Zpos_prev_prev, gridSize);
 
         if (printVert_curr != printVert_prev) {
-            // This is a transition layer. Generate a serpentine fill for the open squares.
+            // This is a transition layer. Generate an axial serpentine fill for the open squares.
             Polylines serpentine_polylines;
             serpentine_polylines.reserve((size_t(bb.size()(0) / gridSize) + 2) * (size_t(bb.size()(1) / gridSize) + 2));
 
@@ -343,7 +345,7 @@ void Fill3DHoneycomb::_fill_surface_single(
                                 if (num_lines > 2)
                                     serpentine_points.reserve(2 * (num_lines - 2));
 
-                                if (printVert_curr) { // Vertical fill pattern
+                                if (printVert_curr) { // Vertical (axial) fill pattern
                                     for (int i = 1; i <= num_lines - 2; ++i) {
                                         const coord_t current_x = coord_t(min_x + i * actual_spacing);
                                         if (serpentine_points.empty()) {
@@ -359,7 +361,7 @@ void Fill3DHoneycomb::_fill_surface_single(
                                             }
                                         }
                                     }
-                                } else { // Horizontal fill pattern
+                                } else { // Horizontal (axial) fill pattern
                                     for (int i = 1; i <= num_lines - 2; ++i) {
                                         const coord_t current_y = coord_t(min_y + i * actual_spacing);
                                         if (serpentine_points.empty()) {
@@ -387,6 +389,93 @@ void Fill3DHoneycomb::_fill_surface_single(
             }
             // Add the new serpentine polylines to the main pattern.
             append(polylines, std::move(serpentine_polylines));
+        } else if ((printVert_prev != printVert_prev_prev) && (printVert_curr == printVert_prev)) {
+            // This is the layer AFTER a transition. Draw a transverse serpentine pattern.
+            Polylines transverse_polylines;
+            
+            // Calculate the actual boundaries based on the main infill toolpaths for the current layer.
+            const coordf_t perpOffset = std::abs(triWave(Zpos_curr, gridSize) / 2.0);
+            const coordf_t hole_side = gridSize - 2.0 * perpOffset;
+
+            const coordf_t scaled_spacing = scale_(this->spacing);
+            
+            if (hole_side > 0) {
+                // The number of lines is based on the total available space in the axial direction.
+                const int num_lines = floor(hole_side / scaled_spacing) + 1;
+
+                if (num_lines >= 3) {
+                    // The length of the lines is shorter, accounting for switchback clearance.
+                    const coordf_t line_length = hole_side - 2.0 * scaled_spacing;
+                    if (line_length <= 0) goto end_transverse_fill; // Skip if lines have no length.
+
+                    // The checkerboard pattern depends on the state of the PREVIOUS layer (the transition layer)
+                    const bool use_even_parity_checkerboard = printVert_prev;
+                    const int n_max = ceil(bb.size()(0) / gridSize);
+                    const int m_max = ceil(bb.size()(1) / gridSize);
+
+                    for (int n = 0; n <= n_max; ++n) {
+                        for (int m = 0; m <= m_max; ++m) {
+                            bool is_square_location;
+                            if (use_even_parity_checkerboard) {
+                                is_square_location = ((n + m) % 2 == 0);
+                            } else {
+                                is_square_location = ((n + m) % 2 != 0);
+                            }
+
+                            if (is_square_location) {
+                                const coordf_t center_x = n * gridSize + gridSize / 2.;
+                                const coordf_t center_y = m * gridSize + gridSize / 2.;
+                                
+                                Points serpentine_points;
+                                serpentine_points.reserve(2 * num_lines);
+                                
+                                // Center the entire pattern by calculating the offset for the first line.
+                                const coordf_t total_pattern_width = (num_lines > 1) ? (num_lines - 1) * scaled_spacing : 0;
+                                const coordf_t start_offset = (hole_side - total_pattern_width) / 2.0;
+
+                                if (printVert_curr) { // Main lines are vertical, so draw HORIZONTAL (transverse)
+                                    const coordf_t half_line_length = line_length / 2.0;
+                                    const coord_t min_x = coord_t(center_x - half_line_length);
+                                    const coord_t max_x = coord_t(center_x + half_line_length);
+                                    const coordf_t min_y_boundary = center_y - hole_side / 2.0;
+                                    
+                                    for (int i = 0; i < num_lines; ++i) {
+                                        const coord_t current_y = coord_t(min_y_boundary + start_offset + i * scaled_spacing);
+                                        if (i % 2 == 0) { // left to right
+                                            serpentine_points.emplace_back(min_x, current_y);
+                                            serpentine_points.emplace_back(max_x, current_y);
+                                        } else { // right to left
+                                            serpentine_points.emplace_back(max_x, current_y);
+                                            serpentine_points.emplace_back(min_x, current_y);
+                                        }
+                                    }
+                                } else { // Main lines are horizontal, so draw VERTICAL (transverse)
+                                    const coordf_t half_line_length = line_length / 2.0;
+                                    const coord_t min_y = coord_t(center_y - half_line_length);
+                                    const coord_t max_y = coord_t(center_y + half_line_length);
+                                    const coordf_t min_x_boundary = center_x - hole_side / 2.0;
+
+                                    for (int i = 0; i < num_lines; ++i) {
+                                        const coord_t current_x = coord_t(min_x_boundary + start_offset + i * scaled_spacing);
+                                        if (i % 2 == 0) { // top to bottom
+                                            serpentine_points.emplace_back(current_x, max_y);
+                                            serpentine_points.emplace_back(current_x, min_y);
+                                        } else { // bottom to top
+                                            serpentine_points.emplace_back(current_x, min_y);
+                                            serpentine_points.emplace_back(current_x, max_y);
+                                        }
+                                    }
+                                }
+                                if (serpentine_points.size() > 1) {
+                                    transverse_polylines.emplace_back(std::move(serpentine_points));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            end_transverse_fill:;
+            append(polylines, std::move(transverse_polylines));
         }
     }
 
