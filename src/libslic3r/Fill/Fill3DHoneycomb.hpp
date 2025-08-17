@@ -26,6 +26,8 @@ public:
 // note: updated 3D Honeycomb doesn't need bridge flow because the
 //       pattern is placed on top of previous layers
 
+    bool is_self_crossing() override { return false; }
+
 protected:
 	void _fill_surface_single(
 	    const FillParams                &params, 
