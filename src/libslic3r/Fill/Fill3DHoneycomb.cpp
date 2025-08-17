@@ -288,10 +288,63 @@ void Fill3DHoneycomb::_fill_surface_single(
         coordf_t Zpos_curr = scale_(this->z) * zScale;
         coordf_t Zpos_prev = (scale_(this->z) - single_layer_height_scaled) * zScale;
         coordf_t Zpos_prev_prev = (scale_(this->z) - 2 * single_layer_height_scaled) * zScale;
+        coordf_t Zpos_next = (scale_(this->z) + single_layer_height_scaled) * zScale;
 
         bool printVert_curr = calculate_print_vert(Zpos_curr, gridSize);
         bool printVert_prev = calculate_print_vert(Zpos_prev, gridSize);
         bool printVert_prev_prev = calculate_print_vert(Zpos_prev_prev, gridSize);
+        bool printVert_next = calculate_print_vert(Zpos_next, gridSize);
+
+        // Add a skeleton layer to put infill anchors on the wall before the
+        // first square bridge layer. The lines generated here are not the
+        // support themselves, but act as guides. The slicer will create
+        // the actual support line between them using an infill anchor.
+        if (printVert_curr != printVert_next) {
+            Polylines support_polylines;
+            const bool use_even_parity_checkerboard = printVert_next;
+
+            // Calculate the size of the squares on the NEXT layer.
+            const coordf_t perpOffset_next = std::abs(triWave(Zpos_next, gridSize) / 2.0);
+            const coordf_t square_side_next = gridSize - 2.0 * perpOffset_next;
+
+            if (square_side_next > 0) {
+                const int n_max = ceil(bb.size()(0) / gridSize);
+                const int m_max = ceil(bb.size()(1) / gridSize);
+
+                for (int n = 0; n <= n_max; ++n) {
+                    for (int m = 0; m <= m_max; ++m) {
+                        bool is_square_location;
+                        if (use_even_parity_checkerboard) {
+                            is_square_location = ((n + m) % 2 == 0);
+                        } else {
+                            is_square_location = ((n + m) % 2 != 0);
+                        }
+
+                        if (is_square_location) {
+                            const coordf_t center_x = n * gridSize + gridSize / 2.;
+                            const coordf_t center_y = m * gridSize + gridSize / 2.;
+
+                            const coordf_t half_side_next = square_side_next / 2.0;
+                            const coord_t min_coord_x_next = coord_t(center_x - half_side_next);
+                            const coord_t max_coord_x_next = coord_t(center_x + half_side_next);
+                            const coord_t min_coord_y_next = coord_t(center_y - half_side_next);
+                            const coord_t max_coord_y_next = coord_t(center_y + half_side_next);
+
+                            // For vertical serpentine on the next layer, draw vertical skeleton lines.
+                            // The slicer will then create a horizontal support line between them.
+                            if (printVert_next) {
+                                support_polylines.emplace_back(Points{Point(min_coord_x_next, min_coord_y_next), Point(min_coord_x_next, max_coord_y_next)});
+                                support_polylines.emplace_back(Points{Point(max_coord_x_next, min_coord_y_next), Point(max_coord_x_next, max_coord_y_next)});
+                            } else { // For horizontal serpentine on the next layer, draw horizontal skeleton lines.
+                                support_polylines.emplace_back(Points{Point(min_coord_x_next, min_coord_y_next), Point(max_coord_x_next, min_coord_y_next)});
+                                support_polylines.emplace_back(Points{Point(min_coord_x_next, max_coord_y_next), Point(max_coord_x_next, max_coord_y_next)});
+                            }
+                        }
+                    }
+                }
+                append(polylines, std::move(support_polylines));
+            }
+        }
 
         if (printVert_curr != printVert_prev) {
             // This is a transition layer. Generate an axial serpentine fill for the open squares.
